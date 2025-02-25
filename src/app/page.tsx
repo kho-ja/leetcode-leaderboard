@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Image from "next/image"
 import { Calendar, Medal, Loader2, Target, Trophy, Code, LineChart, Flame, AlertCircle, X } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -200,8 +201,10 @@ export default function DashboardPage() {
             {/* Second Place */}
             <div className="flex flex-col items-center">
               <div className="relative mb-2">
-                <img
+                <Image
                   src={topUsers[1].avatar || "/placeholder.svg?height=80&width=80"}
+                  width={80}
+                  height={80}
                   alt={topUsers[1].name}
                   className="h-20 w-20 cursor-pointer rounded-full border-4 border-silver"
                   onClick={() => openLeetcodeProfile(topUsers[1].id)}
@@ -218,8 +221,10 @@ export default function DashboardPage() {
             {/* First Place */}
             <div className="flex flex-col items-center">
               <div className="relative mb-2">
-                <img
+                <Image
                   src={topUsers[0].avatar || "/placeholder.svg?height=96&width=96"}
+                  width={96}
+                  height={96}
                   alt={topUsers[0].name}
                   className="h-24 w-24 cursor-pointer rounded-full border-4 border-gold"
                   onClick={() => openLeetcodeProfile(topUsers[0].id)}
@@ -236,8 +241,10 @@ export default function DashboardPage() {
             {/* Third Place */}
             <div className="flex flex-col items-center">
               <div className="relative mb-2">
-                <img
+                <Image
                   src={topUsers[2].avatar || "/placeholder.svg?height=64&width=64"}
+                  width={64}
+                  height={64}
                   alt={topUsers[2].name}
                   className="h-16 w-16 cursor-pointer rounded-full border-4 border-bronze"
                   onClick={() => openLeetcodeProfile(topUsers[2].id)}

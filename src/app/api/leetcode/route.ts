@@ -2,6 +2,82 @@ import { NextResponse } from "next/server"
 import fs from "fs/promises"
 import path from "path"
 
+// Type definitions for LeetCode API responses
+interface LeetCodeSubmission {
+  difficulty: string;
+  count: number;
+  submissions: number;
+}
+
+interface LeetCodeStreak {
+  currentStreak: number;
+  maxStreak: number;
+}
+
+interface LeetCodeProfile {
+  realName: string;
+  userAvatar: string;
+  ranking?: number;
+  reputation?: number;
+  starRating?: number;
+  aboutMe?: string;
+  skillTags?: string[];
+  postViewCount?: number;
+  postViewCountDiff?: number;
+  company?: string;
+  school?: string;
+  websites?: string[];
+  countryName?: string;
+  streak?: LeetCodeStreak;
+}
+
+interface LeetCodeUser {
+  username: string;
+  profile: LeetCodeProfile;
+  submitStats: {
+    acSubmissionNum: LeetCodeSubmission[];
+  };
+  submissionCalendar: string;
+}
+
+// Removed unused interface LeetCodeApiResponse
+
+interface ApiResult {
+  error?: string;
+  status?: number;
+  matchedUser?: LeetCodeUser;
+}
+
+// Define proper types for cache data
+interface UserData {
+  id: string;
+  name: string;
+  avatar: string;
+  totalSolved: number;
+  problemsByDifficulty: {
+    easy: number;
+    medium: number;
+    hard: number;
+  };
+  submissions: number;
+  acceptedSubmissions: number[];
+  streak?: {
+    current: number;
+    max: number;
+  };
+}
+
+interface ErrorData {
+  username: string;
+  error: string;
+}
+
+interface CacheData {
+  users: UserData[];
+  errors: ErrorData[];
+  timestamp: string;
+}
+
 // Array of LeetCode usernames to fetch
 const usernames = [
   "Kho_ja",
@@ -37,7 +113,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 /**
  * Loads cached data if available and not expired
  */
-async function loadCache() {
+async function loadCache(): Promise<CacheData | null> {
   try {
     // Ensure cache directory exists
     await fs.mkdir(path.dirname(CACHE_FILE_PATH), { recursive: true })
@@ -54,7 +130,8 @@ async function loadCache() {
 
     console.log('Cache expired, fetching fresh data')
     return null
-  } catch (error) {
+  } catch {
+    // Removed unused variable
     console.log('No cache found or error reading cache')
     return null
   }
@@ -63,7 +140,7 @@ async function loadCache() {
 /**
  * Saves data to the cache
  */
-async function saveCache(data: any) {
+async function saveCache(data: CacheData): Promise<void> {
   try {
     const cacheContent = JSON.stringify({
       timestamp: Date.now(),
@@ -81,7 +158,7 @@ async function saveCache(data: any) {
 /**
  * Fetches a user's data from the LeetCode GraphQL API
  */
-async function fetchLeetCodeUser(username: string) {
+async function fetchLeetCodeUser(username: string): Promise<ApiResult> {
   const query = `
     query userPublicProfile($username: String!) {
       matchedUser(username: $username) {
@@ -171,9 +248,9 @@ async function fetchLeetCodeUser(username: string) {
 /**
  * Processes the user data from LeetCode API
  */
-function processUserData(results: any[]) {
-  const users = []
-  const errors = []
+function processUserData(results: ApiResult[]): { users: UserData[], errors: ErrorData[] } {
+  const users: UserData[] = []
+  const errors: ErrorData[] = []
 
   for (let i = 0; i < usernames.length; i++) {
     const result = results[i]
@@ -189,7 +266,7 @@ function processUserData(results: any[]) {
     }
 
     // If no error, process the user data
-    const { matchedUser } = result
+    const { matchedUser } = result as { matchedUser: LeetCodeUser }
     const {
       username: leetUsername,
       profile,
@@ -198,9 +275,9 @@ function processUserData(results: any[]) {
     } = matchedUser
 
     // Extract problem counts by difficulty
-    const easy = submitStats.acSubmissionNum.find((s: any) => s.difficulty === "Easy")?.count || 0
-    const medium = submitStats.acSubmissionNum.find((s: any) => s.difficulty === "Medium")?.count || 0
-    const hard = submitStats.acSubmissionNum.find((s: any) => s.difficulty === "Hard")?.count || 0
+    const easy = submitStats.acSubmissionNum.find((s) => s.difficulty === "Easy")?.count || 0
+    const medium = submitStats.acSubmissionNum.find((s) => s.difficulty === "Medium")?.count || 0
+    const hard = submitStats.acSubmissionNum.find((s) => s.difficulty === "Hard")?.count || 0
 
     // Extract submission timestamps (if available)
     let acceptedSubmissions: number[] = []
@@ -215,7 +292,7 @@ function processUserData(results: any[]) {
 
     // Get total submissions count
     const totalSubmissions = submitStats.acSubmissionNum.find(
-      (s: any) => s.difficulty === "All"
+      (s) => s.difficulty === "All"
     )?.submissions || 0
 
     // Get streak information
@@ -287,7 +364,7 @@ export async function GET() {
   const { users, errors } = processUserData(usersResults)
 
   // Cache the results for future requests
-  const responseData = {
+  const responseData: CacheData = {
     users,
     errors,
     timestamp: new Date().toISOString(),
