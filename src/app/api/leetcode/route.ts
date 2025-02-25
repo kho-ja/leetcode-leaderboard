@@ -104,6 +104,7 @@ const usernames = [
 const CACHE_FILE_PATH = path.join(process.cwd(), 'cache', 'leetcode-data.json')
 const CACHE_EXPIRY_MS = 60 * 60 * 1000 // 1 hour
 const REQUEST_DELAY_MS = 500 // 500ms delay between requests to avoid rate limiting
+const MAX_RETRIES = 2 // Maximum number of retries for failed requests
 
 /**
  * Sleep for the given number of milliseconds
@@ -120,19 +121,22 @@ async function loadCache(): Promise<CacheData | null> {
 
     // Try to read the cache file
     const cacheData = await fs.readFile(CACHE_FILE_PATH, 'utf8')
-    const { timestamp, data } = JSON.parse(cacheData)
-
+    const parsedData = JSON.parse(cacheData)
+    
+    // Handle both potential cache structures
+    const timestamp = parsedData.timestamp || Date.now()
+    const data = parsedData.data || parsedData
+    
     // Check if cache is expired
     if (Date.now() - timestamp < CACHE_EXPIRY_MS) {
       console.log('Using cached LeetCode data')
-      return data
+      return data as CacheData
     }
 
     console.log('Cache expired, fetching fresh data')
     return null
-  } catch {
-    // Removed unused variable
-    console.log('No cache found or error reading cache')
+  } catch (error) {
+    console.log('No cache found or error reading cache:', error)
     return null
   }
 }
@@ -145,7 +149,7 @@ async function saveCache(data: CacheData): Promise<void> {
     const cacheContent = JSON.stringify({
       timestamp: Date.now(),
       data
-    })
+    }, null, 2) // Pretty print for easier debugging
 
     await fs.mkdir(path.dirname(CACHE_FILE_PATH), { recursive: true })
     await fs.writeFile(CACHE_FILE_PATH, cacheContent)
@@ -156,9 +160,10 @@ async function saveCache(data: CacheData): Promise<void> {
 }
 
 /**
- * Fetches a user's data from the LeetCode GraphQL API
+ * Fetches a user's data from the LeetCode GraphQL API with retries
  */
 async function fetchLeetCodeUser(username: string): Promise<ApiResult> {
+  // Updated query to remove the streak field that's causing errors
   const query = `
     query userPublicProfile($username: String!) {
       matchedUser(username: $username) {
@@ -166,18 +171,6 @@ async function fetchLeetCodeUser(username: string): Promise<ApiResult> {
         profile {
           realName
           userAvatar
-          ranking
-          reputation
-          starRating
-          aboutMe
-          skillTags
-          postViewCount
-          postViewCountDiff
-          company
-          school
-          websites
-          countryName
-          streak
         }
         submitStats: submitStatsGlobal {
           acSubmissionNum {
@@ -195,53 +188,100 @@ async function fetchLeetCodeUser(username: string): Promise<ApiResult> {
     username,
   }
 
-  try {
-    // Add delay before request to avoid rate limiting
-    await sleep(REQUEST_DELAY_MS)
+  let retries = 0;
+  
+  while (retries <= MAX_RETRIES) {
+    try {
+      // Add delay before request to avoid rate limiting
+      await sleep(REQUEST_DELAY_MS * (retries + 1))
 
-    const response = await fetch("https://leetcode.com/graphql/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Referer": "https://leetcode.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-      },
-      body: JSON.stringify({
-        query,
-        variables,
-      }),
-    })
+      console.log(`Fetching data for ${username} (attempt ${retries + 1})`)
+      
+      const response = await fetch("https://leetcode.com/graphql", { // Removed trailing slash
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Referer": "https://leetcode.com",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        },
+        body: JSON.stringify({
+          query,
+          variables,
+        }),
+        cache: 'no-store' // Prevent caching by the fetch API
+      })
 
-    if (!response.ok) {
-      if (response.status === 429) {
+      const responseText = await response.text();
+      let data;
+      
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        console.error(e);
+        console.error(`Failed to parse JSON response for ${username}:`, responseText.substring(0, 100));
+        throw new Error("Invalid JSON response from LeetCode API");
+      }
+
+      if (!response.ok) {
+        if (response.status === 429) {
+          console.log(`Rate limited for ${username}`);
+          return {
+            error: "Rate limited by LeetCode API",
+            status: 429
+          }
+        }
+        
+        if (response.status === 400) {
+          console.error(`Bad request for ${username}:`, data);
+          return {
+            error: `Bad request: ${data?.errors?.[0]?.message || 'Unknown error'}`,
+            status: 400
+          }
+        }
+
         return {
-          error: "Rate limited by LeetCode API",
-          status: 429
+          error: `HTTP error! status: ${response.status}`,
+          status: response.status,
         }
       }
 
-      return {
-        error: `HTTP error! status: ${response.status}`,
-        status: response.status,
+      // Check for GraphQL errors
+      if (data.errors) {
+        const errorMessage = data.errors[0]?.message || 'Unknown GraphQL error';
+        console.error(`GraphQL error for ${username}:`, errorMessage);
+        return {
+          error: `GraphQL error: ${errorMessage}`,
+          status: 200, // GraphQL returns 200 even with errors
+        }
       }
-    }
 
-    const data = await response.json()
-
-    // Check if the user exists
-    if (!data.data.matchedUser) {
-      return {
-        error: `User '${username}' not found`,
-        status: 404,
+      // Check if the user exists
+      if (!data.data?.matchedUser) {
+        return {
+          error: `User '${username}' not found`,
+          status: 404,
+        }
       }
-    }
 
-    return data.data
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : "Unknown error occurred",
-      status: 500,
+      return data.data
+    } catch (error) {
+      console.error(`Error fetching ${username} (attempt ${retries + 1}):`, error);
+      retries++;
+      
+      if (retries > MAX_RETRIES) {
+        return {
+          error: error instanceof Error ? error.message : "Unknown error occurred",
+          status: 500,
+        }
+      }
+      // Will retry on next loop iteration
     }
+  }
+  
+  // This should never be reached due to the return in the catch block
+  return {
+    error: "Maximum retries exceeded",
+    status: 500,
   }
 }
 
@@ -295,17 +335,79 @@ function processUserData(results: ApiResult[]): { users: UserData[], errors: Err
       (s) => s.difficulty === "All"
     )?.submissions || 0
 
-    // Get streak information
-    let streak = {
-      current: 0,
-      max: 0
-    }
-
-    if (profile.streak) {
-      streak = {
-        current: profile.streak.currentStreak || 0,
-        max: profile.streak.maxStreak || 0
+    // Calculate streak from submission calendar instead of profile.streak
+    let streak;
+    if (acceptedSubmissions.length > 0) {
+      try {
+        // Sort dates in ascending order
+        const sortedSubmissions = [...acceptedSubmissions].sort((a, b) => a - b);
+        
+        // Calculate date ranges to find streaks
+        let currentStreak = 0;
+        let maxStreak = 0;
+        let lastDate = 0;
+        
+        // Check if there's a submission within the last 24 hours (for current streak)
+        const now = Date.now() / 1000; // Convert to seconds
+        const oneDayAgo = now - (24 * 60 * 60); // 24 hours ago in seconds
+        const hasSubmissionToday = sortedSubmissions.some(
+          date => date >= oneDayAgo && date <= now
+        );
+        
+        if (hasSubmissionToday) {
+          currentStreak = 1;
+          
+          // Count backwards from yesterday to find the current streak
+          let checkDate = oneDayAgo - (24 * 60 * 60); // Start from 2 days ago
+          let streakDays = 0;
+          
+          while (true) {
+            // Get start and end of the day we're checking
+            const dayStart = checkDate;
+            const dayEnd = checkDate + (24 * 60 * 60);
+            
+            // Check if any submission falls in this day
+            const hasSubmission = sortedSubmissions.some(
+              date => date >= dayStart && date < dayEnd
+            );
+            
+            if (hasSubmission) {
+              streakDays++;
+              checkDate = checkDate - (24 * 60 * 60); // Move to previous day
+            } else {
+              break; // Streak ends
+            }
+          }
+          
+          currentStreak += streakDays;
+          maxStreak = Math.max(currentStreak, maxStreak);
+        }
+        
+        // Also calculate max streak from historical data
+        for (const date of sortedSubmissions) {
+          if (lastDate === 0 || date - lastDate <= (24 * 60 * 60 * 2)) { // Allow up to 48h gap (1 missed day)
+            if (lastDate === 0 || date - lastDate >= (12 * 60 * 60)) { // If at least 12h apart (different days)
+              currentStreak++;
+            }
+          } else {
+            maxStreak = Math.max(maxStreak, currentStreak);
+            currentStreak = 1;
+          }
+          lastDate = date;
+        }
+        
+        maxStreak = Math.max(maxStreak, currentStreak);
+        
+        streak = {
+          current: currentStreak,
+          max: maxStreak
+        };
+      } catch (e) {
+        console.error(`Failed to calculate streak for ${username}:`, e);
+        streak = { current: 0, max: 0 };
       }
+    } else {
+      streak = { current: 0, max: 0 };
     }
 
     users.push({
@@ -331,50 +433,93 @@ function processUserData(results: ApiResult[]): { users: UserData[], errors: Err
  * GET handler for the API route
  */
 export async function GET() {
-  // Try to load data from cache first
-  const cachedData = await loadCache()
+  try {
+    // Try to load data from cache first
+    const cachedData = await loadCache()
 
-  if (cachedData) {
-    return NextResponse.json({
-      ...cachedData,
-      fromCache: true
-    })
-  }
+    if (cachedData) {
+      return NextResponse.json({
+        ...cachedData,
+        fromCache: true
+      })
+    }
 
-  // If no valid cache, fetch from LeetCode API
-  const usersPromises = usernames.map(fetchLeetCodeUser)
-  const usersResults = await Promise.all(usersPromises)
+    // Fetch each user sequentially to avoid overwhelming the API
+    const usersResults: ApiResult[] = [];
+    
+    for (const username of usernames) {
+      const result = await fetchLeetCodeUser(username);
+      usersResults.push(result);
+      
+      // If we hit a rate limit, break early
+      if (result.status === 429) {
+        break;
+      }
+    }
 
-  // Check if we're getting rate limited
-  const rateLimited = usersResults.some(result => result.status === 429)
-  if (rateLimited) {
-    // Use mock data or previous cached data if available
+    // Check if we're getting rate limited
+    const rateLimited = usersResults.some(result => result.status === 429)
+    if (rateLimited) {
+      console.log("Rate limited by LeetCode API");
+      
+      // Try to use older cache if available, even if expired
+      try {
+        const oldCache = await fs.readFile(CACHE_FILE_PATH, 'utf8');
+        const parsedCache = JSON.parse(oldCache);
+        const oldData = parsedCache.data || parsedCache;
+        
+        if (oldData && oldData.users && oldData.users.length > 0) {
+          console.log("Serving expired cache due to rate limiting");
+          return NextResponse.json({
+            ...oldData,
+            fromCache: true,
+            rateLimited: true,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (e) {
+        console.error("No old cache available:", e);
+      }
+      
+      // If no old cache, return error
+      return NextResponse.json({
+        users: [],
+        errors: [{
+          username: "ALL",
+          error: "The LeetCode API is currently rate limiting requests. Please try again later."
+        }],
+        rateLimited: true,
+        timestamp: new Date().toISOString(),
+      }, { status: 429 })
+    }
+
+    // Process user results
+    const { users, errors } = processUserData(usersResults)
+
+    // Cache the results for future requests
+    const responseData: CacheData = {
+      users,
+      errors,
+      timestamp: new Date().toISOString(),
+    }
+
+    // Only cache if we got some successful results
+    if (users.length > 0) {
+      await saveCache(responseData)
+    }
+
+    return NextResponse.json(responseData)
+  } catch (error) {
+    console.error("Unhandled error in GET handler:", error);
+    
     return NextResponse.json({
       users: [],
       errors: [{
         username: "ALL",
-        error: "The LeetCode API is currently rate limiting requests. Please try again later."
+        error: "An unexpected error occurred: " + (error instanceof Error ? error.message : String(error))
       }],
-      rateLimited: true,
       timestamp: new Date().toISOString(),
-    }, { status: 429 })
+    }, { status: 500 });
   }
-
-  // Process user results
-  const { users, errors } = processUserData(usersResults)
-
-  // Cache the results for future requests
-  const responseData: CacheData = {
-    users,
-    errors,
-    timestamp: new Date().toISOString(),
-  }
-
-  // Only cache if we got some successful results
-  if (users.length > 0) {
-    await saveCache(responseData)
-  }
-
-  return NextResponse.json(responseData)
 }
 
