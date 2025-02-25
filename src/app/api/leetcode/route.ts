@@ -117,7 +117,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 async function loadCache(): Promise<CacheData | null> {
   try {
     // Try to read from Vercel REDIS
-    const cacheData = await redis.get(LEETCODE_CACHE_KEY) as {
+    const cacheData = JSON.parse(await redis.get(LEETCODE_CACHE_KEY) as string) as {
       timestamp: number;
       data: CacheData;
     } | null;
