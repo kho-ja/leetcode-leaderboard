@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
-import { kv } from '@vercel/kv'
+import { createClient } from 'redis';
+
+const redis = await createClient({ url: process.env.REDIS_URL }).connect();;
 
 // Type definitions for LeetCode API responses
 interface LeetCodeSubmission {
@@ -114,14 +116,14 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
  */
 async function loadCache(): Promise<CacheData | null> {
   try {
-    // Try to read from Vercel KV
-    const cacheData = await kv.get<{
+    // Try to read from Vercel REDIS
+    const cacheData = await redis.get(LEETCODE_CACHE_KEY) as {
       timestamp: number;
       data: CacheData;
-    }>(LEETCODE_CACHE_KEY)
+    } | null;
     
     if (!cacheData) {
-      console.log('No cache found in KV')
+      console.log('No cache found in REDIS')
       return null
     }
     
@@ -129,14 +131,14 @@ async function loadCache(): Promise<CacheData | null> {
     
     // Check if cache is expired
     if (Date.now() - timestamp < CACHE_EXPIRY_MS) {
-      console.log('Using cached LeetCode data from KV')
+      console.log('Using cached LeetCode data from REDIS')
       return data
     }
 
     console.log('Cache expired, fetching fresh data')
     return null
   } catch (error) {
-    console.log('Error reading KV cache:', error)
+    console.log('Error reading REDIS cache:', error)
     return null
   }
 }
@@ -151,10 +153,10 @@ async function saveCache(data: CacheData): Promise<void> {
       data
     }
 
-    await kv.set(LEETCODE_CACHE_KEY, cacheContent)
-    console.log('LeetCode data cached successfully in KV')
+    await redis.set(LEETCODE_CACHE_KEY, JSON.stringify(cacheContent))
+    console.log('LeetCode data cached successfully in REDIS')
   } catch (error) {
-    console.error('Failed to cache LeetCode data in KV:', error)
+    console.error('Failed to cache LeetCode data in REDIS:', error)
   }
 }
 
@@ -463,10 +465,10 @@ export async function GET() {
       
       // Try to use older cache if available, even if expired
       try {
-        const oldCache = await kv.get<{
+        const oldCache = await redis.get(LEETCODE_CACHE_KEY) as {
           timestamp: number;
           data: CacheData;
-        }>(LEETCODE_CACHE_KEY)
+        } | null;
         
         if (oldCache && oldCache.data && oldCache.data.users && oldCache.data.users.length > 0) {
           console.log("Serving expired cache due to rate limiting");
