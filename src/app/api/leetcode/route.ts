@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
-import fs from "fs/promises"
-import path from "path"
+import { kv } from '@vercel/kv'
 
 // Type definitions for LeetCode API responses
 interface LeetCodeSubmission {
@@ -95,13 +94,12 @@ const usernames = [
   "agadev",
   "muza_Sano",
   "yamamoto05",
-  // This username is causing issues
-  // "Ibroximov_Diyorbek",
+  "Ibroximov_Diyorbek",
   "Daydi",
 ]
 
 // Cache configuration
-const CACHE_FILE_PATH = path.join(process.cwd(), 'cache', 'leetcode-data.json')
+const LEETCODE_CACHE_KEY = 'leetcode-data'
 const CACHE_EXPIRY_MS = 60 * 60 * 1000 // 1 hour
 const REQUEST_DELAY_MS = 500 // 500ms delay between requests to avoid rate limiting
 const MAX_RETRIES = 2 // Maximum number of retries for failed requests
@@ -116,27 +114,29 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
  */
 async function loadCache(): Promise<CacheData | null> {
   try {
-    // Ensure cache directory exists
-    await fs.mkdir(path.dirname(CACHE_FILE_PATH), { recursive: true })
-
-    // Try to read the cache file
-    const cacheData = await fs.readFile(CACHE_FILE_PATH, 'utf8')
-    const parsedData = JSON.parse(cacheData)
+    // Try to read from Vercel KV
+    const cacheData = await kv.get<{
+      timestamp: number;
+      data: CacheData;
+    }>(LEETCODE_CACHE_KEY)
     
-    // Handle both potential cache structures
-    const timestamp = parsedData.timestamp || Date.now()
-    const data = parsedData.data || parsedData
+    if (!cacheData) {
+      console.log('No cache found in KV')
+      return null
+    }
+    
+    const { timestamp, data } = cacheData
     
     // Check if cache is expired
     if (Date.now() - timestamp < CACHE_EXPIRY_MS) {
-      console.log('Using cached LeetCode data')
-      return data as CacheData
+      console.log('Using cached LeetCode data from KV')
+      return data
     }
 
     console.log('Cache expired, fetching fresh data')
     return null
   } catch (error) {
-    console.log('No cache found or error reading cache:', error)
+    console.log('Error reading KV cache:', error)
     return null
   }
 }
@@ -146,16 +146,15 @@ async function loadCache(): Promise<CacheData | null> {
  */
 async function saveCache(data: CacheData): Promise<void> {
   try {
-    const cacheContent = JSON.stringify({
+    const cacheContent = {
       timestamp: Date.now(),
       data
-    }, null, 2) // Pretty print for easier debugging
+    }
 
-    await fs.mkdir(path.dirname(CACHE_FILE_PATH), { recursive: true })
-    await fs.writeFile(CACHE_FILE_PATH, cacheContent)
-    console.log('LeetCode data cached successfully')
+    await kv.set(LEETCODE_CACHE_KEY, cacheContent)
+    console.log('LeetCode data cached successfully in KV')
   } catch (error) {
-    console.error('Failed to cache LeetCode data:', error)
+    console.error('Failed to cache LeetCode data in KV:', error)
   }
 }
 
@@ -464,14 +463,15 @@ export async function GET() {
       
       // Try to use older cache if available, even if expired
       try {
-        const oldCache = await fs.readFile(CACHE_FILE_PATH, 'utf8');
-        const parsedCache = JSON.parse(oldCache);
-        const oldData = parsedCache.data || parsedCache;
+        const oldCache = await kv.get<{
+          timestamp: number;
+          data: CacheData;
+        }>(LEETCODE_CACHE_KEY)
         
-        if (oldData && oldData.users && oldData.users.length > 0) {
+        if (oldCache && oldCache.data && oldCache.data.users && oldCache.data.users.length > 0) {
           console.log("Serving expired cache due to rate limiting");
           return NextResponse.json({
-            ...oldData,
+            ...oldCache.data,
             fromCache: true,
             rateLimited: true,
             timestamp: new Date().toISOString(),
