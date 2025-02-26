@@ -53,48 +53,93 @@ const usernames = [
 ]
 
 // Cache configuration
-const CACHE_EXPIRY_MS = 60 * 60 * 1000 // 1 hour
+const CACHE_EXPIRY_MS = 5 * 60 * 60 * 1000 // 1 hour
+const MAX_CONCURRENT_REQUESTS = 5 // Limit concurrent requests to avoid rate limiting
+const STALE_WHILE_REVALIDATE_MS = 24 * 60 * 60 * 1000 // 24 hours: still serve stale data up to this time
 
 /**
- * Loads cached data if available and not expired
+ * Loads cached data for specific usernames
  */
-async function loadCache(): Promise<UserData[] | null> {
+async function loadCachedUsers(usersToFetch: string[]): Promise<{
+  cachedUsers: UserData[],
+  usersToRefresh: string[]
+}> {
   try {
     const cachedUsers = await prisma.leetCodeUser.findMany({
       where: {
-        lastFetch: {
-          gte: new Date(Date.now() - CACHE_EXPIRY_MS)
-        }
-      }
-    })
-
-    if (cachedUsers.length === usernames.length) {
-      console.log('Using cached LeetCode data from database')
-      return cachedUsers.map(user => ({
-        id: user.id,
-        name: user.name,
-        avatar: user.avatar,
-        totalSolved: user.totalSolved,
-        problemsByDifficulty: {
-          easy: user.easyCount,
-          medium: user.mediumCount,
-          hard: user.hardCount,
+        id: {
+          in: usersToFetch
         },
-        submissions: user.submissions,
-        acceptedSubmissions: user.submissionCalendar ?
-          Object.keys(user.submissionCalendar as object).map(k => parseInt(k)) : [],
-        streak: {
-          current: user.currentStreak,
-          max: user.maxStreak
-        }
-      }))
+      }
+    });
+
+    // Group users by freshness
+    const freshUsers: UserData[] = [];
+    const usersToRefresh: string[] = [];
+
+    for (const username of usersToFetch) {
+      const cachedUser = cachedUsers.find(user => user.id === username);
+
+      if (!cachedUser) {
+        // User not in cache at all
+        usersToRefresh.push(username);
+        continue;
+      }
+
+      // Check if cache is fresh
+      const isCacheFresh = cachedUser.lastFetch &&
+        new Date(cachedUser.lastFetch).getTime() > Date.now() - CACHE_EXPIRY_MS;
+
+      if (isCacheFresh) {
+        // Use fresh cached data
+        freshUsers.push({
+          id: cachedUser.id,
+          name: cachedUser.name,
+          avatar: cachedUser.avatar,
+          totalSolved: cachedUser.totalSolved,
+          problemsByDifficulty: {
+            easy: cachedUser.easyCount,
+            medium: cachedUser.mediumCount,
+            hard: cachedUser.hardCount,
+          },
+          submissions: cachedUser.submissions,
+          acceptedSubmissions: cachedUser.submissionCalendar ?
+            Object.keys(cachedUser.submissionCalendar as object).map(k => parseInt(k)) : [],
+          streak: {
+            current: cachedUser.currentStreak,
+            max: cachedUser.maxStreak
+          }
+        });
+      } else {
+        // Cache exists but is stale
+        usersToRefresh.push(username);
+
+        // Still include stale data for immediate response
+        freshUsers.push({
+          id: cachedUser.id,
+          name: cachedUser.name,
+          avatar: cachedUser.avatar,
+          totalSolved: cachedUser.totalSolved,
+          problemsByDifficulty: {
+            easy: cachedUser.easyCount,
+            medium: cachedUser.mediumCount,
+            hard: cachedUser.hardCount,
+          },
+          submissions: cachedUser.submissions,
+          acceptedSubmissions: cachedUser.submissionCalendar ?
+            Object.keys(cachedUser.submissionCalendar as object).map(k => parseInt(k)) : [],
+          streak: {
+            current: cachedUser.currentStreak,
+            max: cachedUser.maxStreak
+          }
+        });
+      }
     }
 
-    console.log('Cache expired or incomplete, fetching fresh data')
-    return null
+    return { cachedUsers: freshUsers, usersToRefresh };
   } catch (error) {
-    console.error('Error reading database cache:', error)
-    return null
+    console.error('Error reading database cache:', error);
+    return { cachedUsers: [], usersToRefresh: usersToFetch };
   }
 }
 
@@ -142,6 +187,7 @@ async function saveUserData(userData: UserData): Promise<void> {
 
     // Then create submissions records
     const submissions = userData.acceptedSubmissions.map(timestamp => ({
+
       userId: userData.id,
       timestamp: new Date(timestamp * 1000),
       // We'd need these from the LeetCode API
@@ -177,6 +223,44 @@ async function fetchLeetCodeUser(username: string): Promise<UserProfile | null> 
     console.error(`Failed to fetch user data for ${username}:`, error)
     return null
   }
+}
+
+/**
+ * Fetches multiple users in parallel with rate limiting
+ */
+async function fetchUsersInParallel(usernames: string[]): Promise<UserProfile[]> {
+  const results: UserProfile[] = [];
+
+  // Process in batches to avoid overwhelming the API
+  for (let i = 0; i < usernames.length; i += MAX_CONCURRENT_REQUESTS) {
+    const batch = usernames.slice(i, i + MAX_CONCURRENT_REQUESTS);
+
+    // Fetch batch in parallel
+    const batchResults = await Promise.all(
+      batch.map(async (username) => {
+        try {
+          return await fetchLeetCodeUser(username);
+        } catch (error) {
+          console.error(`Failed to fetch ${username}:`, error);
+          return null;
+        }
+      })
+    );
+
+    // Add successful results to the collection
+    for (const result of batchResults) {
+      if (result) {
+        results.push(result);
+      }
+    }
+
+    // Add a small delay between batches to be nice to the API
+    if (i + MAX_CONCURRENT_REQUESTS < usernames.length) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -321,40 +405,106 @@ function processUserData(results: UserProfile[]): { users: UserData[], errors: E
 }
 
 /**
+ * Refreshes user data in the background without blocking the response
+ */
+async function refreshUsersInBackground(usersToRefresh: string[]) {
+  if (usersToRefresh.length === 0) return;
+
+  try {
+    console.log(`Starting background refresh for ${usersToRefresh.length} users`);
+
+    // Fetch users in parallel with rate limiting
+    const usersResults = await fetchUsersInParallel(usersToRefresh);
+
+    // Process user results
+    const { users, errors } = processUserData(usersResults);
+
+    // Save each user to the database
+    await Promise.all(users.map(user => saveUserData(user)));
+
+    console.log(`Background refresh completed for ${users.length} users`);
+
+    // Log successful fetch
+    await prisma.fetchLog.create({
+      data: {
+        success: true,
+        error: `Background refresh completed for ${users.length} users`
+      }
+    });
+
+    return { users, errors };
+  } catch (error) {
+    console.error("Error in background refresh:", error);
+
+    await prisma.fetchLog.create({
+      data: {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error in background refresh'
+      }
+    });
+  }
+}
+
+/**
  * GET handler for the API route
  */
 export async function GET() {
   try {
-    // Try to load data from cache first
-    const cachedData = await loadCache()
+    // Get cached data and determine which users need refreshing
+    const { cachedUsers, usersToRefresh } = await loadCachedUsers(usernames);
 
-    if (cachedData) {
+    // Start a background task to refresh stale or missing users
+    // Note: In production, you might want to use a proper background job system
+    if (usersToRefresh.length > 0) {
+      // Don't await this - let it run in the background
+      refreshUsersInBackground(usersToRefresh);
+    }
+
+    // If we have some cached data, return it immediately
+    if (cachedUsers.length > 0) {
       return NextResponse.json({
-        users: cachedData,
+        users: cachedUsers,
+        refreshing: usersToRefresh.length > 0 ? usersToRefresh : undefined,
         errors: [],
         fromCache: true,
         timestamp: new Date().toISOString(),
-      })
+      });
     }
 
-    // Fetch each user sequentially
-    const usersResults: UserProfile[] = [];
+    // If no cached data available, we need to wait for some data to be fetched
+    // Just fetch a few users for immediate display
+    const quickFetchUsers = usersToRefresh.slice(0, 3); // Just fetch 3 users for quick response
+    const quickResults = await fetchUsersInParallel(quickFetchUsers);
+    const { users, errors } = processUserData(quickResults);
 
-    for (const username of usernames) {
-      const result = await fetchLeetCodeUser(username);
-      if (result) {
-        usersResults.push(result);
+    // Save these first users to cache
+    await Promise.all(users.map(user => saveUserData(user)));
+
+    // Start refreshing the remaining users in the background
+    const remainingUsers = usersToRefresh.slice(3);
+    if (remainingUsers.length > 0) {
+      refreshUsersInBackground(remainingUsers);
+    }
+
+    return NextResponse.json({
+      users,
+      refreshing: remainingUsers.length > 0 ? remainingUsers : undefined,
+      errors,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Unhandled error in GET handler:", error);
+
+    // Log the error
+    await prisma.fetchLog.create({
+      data: {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
       }
-      // Add small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
+    });
 
-    // Check if we're getting rate limited
-    const rateLimited = usersResults.length === 0 || usersResults.some(result => !result.matchedUser)
-    if (rateLimited) {
-      console.log("Rate limited by LeetCode API");
-
-      // Try to use older cache if available, even if expired
+    // Try to return any cached data we might have, even if it's old
+    try {
       const oldCache = await prisma.leetCodeUser.findMany();
       if (oldCache.length > 0) {
         const formattedCache = oldCache.map(user => ({
@@ -378,52 +528,20 @@ export async function GET() {
 
         return NextResponse.json({
           users: formattedCache,
-          errors: [],
+          errors: [{
+            username: "SYSTEM",
+            error: "Error occurred, showing cached data: " + (error instanceof Error ? error.message : String(error))
+          }],
           fromCache: true,
-          rateLimited: true,
+          emergency: true,
           timestamp: new Date().toISOString(),
         });
       }
-
-      return NextResponse.json({
-        users: [],
-        errors: [{
-          username: "ALL",
-          error: "The LeetCode API is currently rate limiting requests. Please try again later."
-        }],
-        rateLimited: true,
-        timestamp: new Date().toISOString(),
-      }, { status: 429 })
+    } catch (cacheError) {
+      console.error("Failed to retrieve emergency cache:", cacheError);
     }
 
-    // Process user results
-    const { users, errors } = processUserData(usersResults)
-
-    // Save each user to the database
-    await Promise.all(users.map(user => saveUserData(user)))
-
-    // Log successful fetch
-    await prisma.fetchLog.create({
-      data: {
-        success: true
-      }
-    })
-
-    return NextResponse.json({
-      users,
-      errors,
-      timestamp: new Date().toISOString(),
-    })
-  } catch (error) {
-    console.error("Unhandled error in GET handler:", error)
-
-    await prisma.fetchLog.create({
-      data: {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      }
-    })
-
+    // If everything fails, return an error
     return NextResponse.json({
       users: [],
       errors: [{
@@ -431,7 +549,7 @@ export async function GET() {
         error: "An unexpected error occurred: " + (error instanceof Error ? error.message : String(error))
       }],
       timestamp: new Date().toISOString(),
-    }, { status: 500 })
+    }, { status: 500 });
   }
 }
 
