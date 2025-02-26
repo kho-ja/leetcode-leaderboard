@@ -55,7 +55,6 @@ const usernames = [
 // Cache configuration
 const CACHE_EXPIRY_MS = 5 * 60 * 60 * 1000 // 1 hour
 const MAX_CONCURRENT_REQUESTS = 5 // Limit concurrent requests to avoid rate limiting
-const STALE_WHILE_REVALIDATE_MS = 24 * 60 * 60 * 1000 // 24 hours: still serve stale data up to this time
 
 /**
  * Loads cached data for specific usernames
