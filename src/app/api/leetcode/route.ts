@@ -1,53 +1,11 @@
 import { NextResponse } from "next/server"
-import { createClient } from 'redis';
+import { LeetCode, UserProfile } from "leetcode-query"
+import { PrismaClient } from '@prisma/client'
 
-const redis = await createClient({ url: process.env.REDIS_URL }).connect();;
+const prisma = new PrismaClient()
+const leetcode = new LeetCode()
 
 // Type definitions for LeetCode API responses
-interface LeetCodeSubmission {
-  difficulty: string;
-  count: number;
-  submissions: number;
-}
-
-interface LeetCodeStreak {
-  currentStreak: number;
-  maxStreak: number;
-}
-
-interface LeetCodeProfile {
-  realName: string;
-  userAvatar: string;
-  ranking?: number;
-  reputation?: number;
-  starRating?: number;
-  aboutMe?: string;
-  skillTags?: string[];
-  postViewCount?: number;
-  postViewCountDiff?: number;
-  company?: string;
-  school?: string;
-  websites?: string[];
-  countryName?: string;
-  streak?: LeetCodeStreak;
-}
-
-interface LeetCodeUser {
-  username: string;
-  profile: LeetCodeProfile;
-  submitStats: {
-    acSubmissionNum: LeetCodeSubmission[];
-  };
-  submissionCalendar: string;
-}
-
-// Removed unused interface LeetCodeApiResponse
-
-interface ApiResult {
-  error?: string;
-  status?: number;
-  matchedUser?: LeetCodeUser;
-}
 
 // Define proper types for cache data
 interface UserData {
@@ -73,12 +31,6 @@ interface ErrorData {
   error: string;
 }
 
-interface CacheData {
-  users: UserData[];
-  errors: ErrorData[];
-  timestamp: string;
-}
-
 // Array of LeetCode usernames to fetch
 const usernames = [
   "Kho_ja",
@@ -101,195 +53,136 @@ const usernames = [
 ]
 
 // Cache configuration
-const LEETCODE_CACHE_KEY = 'leetcode-data'
 const CACHE_EXPIRY_MS = 60 * 60 * 1000 // 1 hour
-const REQUEST_DELAY_MS = 500 // 500ms delay between requests to avoid rate limiting
-const MAX_RETRIES = 2 // Maximum number of retries for failed requests
-
-/**
- * Sleep for the given number of milliseconds
- */
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
  * Loads cached data if available and not expired
  */
-async function loadCache(): Promise<CacheData | null> {
+async function loadCache(): Promise<UserData[] | null> {
   try {
-    // Try to read from Vercel REDIS
-    const cacheData = JSON.parse(await redis.get(LEETCODE_CACHE_KEY) as string) as {
-      timestamp: number;
-      data: CacheData;
-    } | null;
-    
-    if (!cacheData) {
-      console.log('No cache found in REDIS')
-      return null
-    }
-    
-    const { timestamp, data } = cacheData
-    
-    // Check if cache is expired
-    if (Date.now() - timestamp < CACHE_EXPIRY_MS) {
-      console.log('Using cached LeetCode data from REDIS')
-      return data
-    }
-
-    console.log('Cache expired, fetching fresh data')
-    return null
-  } catch (error) {
-    console.log('Error reading REDIS cache:', error)
-    return null
-  }
-}
-
-/**
- * Saves data to the cache
- */
-async function saveCache(data: CacheData): Promise<void> {
-  try {
-    const cacheContent = {
-      timestamp: Date.now(),
-      data
-    }
-
-    await redis.set(LEETCODE_CACHE_KEY, JSON.stringify(cacheContent))
-    console.log('LeetCode data cached successfully in REDIS')
-  } catch (error) {
-    console.error('Failed to cache LeetCode data in REDIS:', error)
-  }
-}
-
-/**
- * Fetches a user's data from the LeetCode GraphQL API with retries
- */
-async function fetchLeetCodeUser(username: string): Promise<ApiResult> {
-  // Updated query to remove the streak field that's causing errors
-  const query = `
-    query userPublicProfile($username: String!) {
-      matchedUser(username: $username) {
-        username
-        profile {
-          realName
-          userAvatar
+    const cachedUsers = await prisma.leetCodeUser.findMany({
+      where: {
+        lastFetch: {
+          gte: new Date(Date.now() - CACHE_EXPIRY_MS)
         }
-        submitStats: submitStatsGlobal {
-          acSubmissionNum {
-            difficulty
-            count
-            submissions
-          }
-        }
-        submissionCalendar
       }
-    }
-  `
+    })
 
-  const variables = {
-    username,
-  }
-
-  let retries = 0;
-  
-  while (retries <= MAX_RETRIES) {
-    try {
-      // Add delay before request to avoid rate limiting
-      await sleep(REQUEST_DELAY_MS * (retries + 1))
-
-      console.log(`Fetching data for ${username} (attempt ${retries + 1})`)
-      
-      const response = await fetch("https://leetcode.com/graphql", { // Removed trailing slash
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Referer": "https://leetcode.com",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    if (cachedUsers.length === usernames.length) {
+      console.log('Using cached LeetCode data from database')
+      return cachedUsers.map(user => ({
+        id: user.id,
+        name: user.name,
+        avatar: user.avatar,
+        totalSolved: user.totalSolved,
+        problemsByDifficulty: {
+          easy: user.easyCount,
+          medium: user.mediumCount,
+          hard: user.hardCount,
         },
-        body: JSON.stringify({
-          query,
-          variables,
-        }),
-        cache: 'no-store' // Prevent caching by the fetch API
-      })
-
-      const responseText = await response.text();
-      let data;
-      
-      try {
-        data = JSON.parse(responseText);
-      } catch (e) {
-        console.error(e);
-        console.error(`Failed to parse JSON response for ${username}:`, responseText.substring(0, 100));
-        throw new Error("Invalid JSON response from LeetCode API");
-      }
-
-      if (!response.ok) {
-        if (response.status === 429) {
-          console.log(`Rate limited for ${username}`);
-          return {
-            error: "Rate limited by LeetCode API",
-            status: 429
-          }
+        submissions: user.submissions,
+        acceptedSubmissions: user.submissionCalendar ?
+          Object.keys(user.submissionCalendar as object).map(k => parseInt(k)) : [],
+        streak: {
+          current: user.currentStreak,
+          max: user.maxStreak
         }
-        
-        if (response.status === 400) {
-          console.error(`Bad request for ${username}:`, data);
-          return {
-            error: `Bad request: ${data?.errors?.[0]?.message || 'Unknown error'}`,
-            status: 400
-          }
-        }
-
-        return {
-          error: `HTTP error! status: ${response.status}`,
-          status: response.status,
-        }
-      }
-
-      // Check for GraphQL errors
-      if (data.errors) {
-        const errorMessage = data.errors[0]?.message || 'Unknown GraphQL error';
-        console.error(`GraphQL error for ${username}:`, errorMessage);
-        return {
-          error: `GraphQL error: ${errorMessage}`,
-          status: 200, // GraphQL returns 200 even with errors
-        }
-      }
-
-      // Check if the user exists
-      if (!data.data?.matchedUser) {
-        return {
-          error: `User '${username}' not found`,
-          status: 404,
-        }
-      }
-
-      return data.data
-    } catch (error) {
-      console.error(`Error fetching ${username} (attempt ${retries + 1}):`, error);
-      retries++;
-      
-      if (retries > MAX_RETRIES) {
-        return {
-          error: error instanceof Error ? error.message : "Unknown error occurred",
-          status: 500,
-        }
-      }
-      // Will retry on next loop iteration
+      }))
     }
+
+    console.log('Cache expired or incomplete, fetching fresh data')
+    return null
+  } catch (error) {
+    console.error('Error reading database cache:', error)
+    return null
   }
-  
-  // This should never be reached due to the return in the catch block
-  return {
-    error: "Maximum retries exceeded",
-    status: 500,
+}
+
+/**
+ * Saves user data to the database
+ */
+async function saveUserData(userData: UserData): Promise<void> {
+  try {
+    // First upsert the user
+    await prisma.leetCodeUser.upsert({
+      where: { id: userData.id },
+      update: {
+        name: userData.name,
+        avatar: userData.avatar,
+        totalSolved: userData.totalSolved,
+        easyCount: userData.problemsByDifficulty.easy,
+        mediumCount: userData.problemsByDifficulty.medium,
+        hardCount: userData.problemsByDifficulty.hard,
+        submissions: userData.submissions,
+        currentStreak: userData.streak?.current || 0,
+        maxStreak: userData.streak?.max || 0,
+        submissionCalendar: userData.acceptedSubmissions.reduce((acc, timestamp) => {
+          acc[timestamp.toString()] = 1;
+          return acc;
+        }, {} as Record<string, number>),
+        lastFetch: new Date(),
+      },
+      create: {
+        id: userData.id,
+        name: userData.name,
+        avatar: userData.avatar,
+        totalSolved: userData.totalSolved,
+        easyCount: userData.problemsByDifficulty.easy,
+        mediumCount: userData.problemsByDifficulty.medium,
+        hardCount: userData.problemsByDifficulty.hard,
+        submissions: userData.submissions,
+        currentStreak: userData.streak?.current || 0,
+        maxStreak: userData.streak?.max || 0,
+        submissionCalendar: userData.acceptedSubmissions.reduce((acc, timestamp) => {
+          acc[timestamp.toString()] = 1;
+          return acc;
+        }, {} as Record<string, number>),
+      }
+    });
+
+    // Then create submissions records
+    const submissions = userData.acceptedSubmissions.map(timestamp => ({
+      userId: userData.id,
+      timestamp: new Date(timestamp * 1000),
+      // We'd need these from the LeetCode API
+      difficulty: "Unknown", // Would need actual difficulty
+      problemId: "Unknown", // Would need actual problem ID
+      accepted: true
+    }));
+
+    // Create the submissions
+    await prisma.leetCodeSubmission.createMany({
+      data: submissions,
+      skipDuplicates: true,
+    });
+  } catch (error) {
+    console.error('Failed to save user data:', error);
+    await prisma.fetchLog.create({
+      data: {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
+    })
+  }
+}
+
+/**
+ * Fetches a user's data from the LeetCode GraphQL API
+ */
+async function fetchLeetCodeUser(username: string): Promise<UserProfile | null> {
+  try {
+    const user = await leetcode.user(username)
+    return user
+  } catch (error) {
+    console.error(`Failed to fetch user data for ${username}:`, error)
+    return null
   }
 }
 
 /**
  * Processes the user data from LeetCode API
  */
-function processUserData(results: ApiResult[]): { users: UserData[], errors: ErrorData[] } {
+function processUserData(results: UserProfile[]): { users: UserData[], errors: ErrorData[] } {
   const users: UserData[] = []
   const errors: ErrorData[] = []
 
@@ -297,28 +190,25 @@ function processUserData(results: ApiResult[]): { users: UserData[], errors: Err
     const result = results[i]
     const username = usernames[i]
 
-    // Check if we got an error
-    if (result.error) {
+    if (!result || !result.matchedUser) {
       errors.push({
         username,
-        error: result.error,
+        error: "Failed to fetch user data",
       })
       continue
     }
 
-    // If no error, process the user data
-    const { matchedUser } = result as { matchedUser: LeetCodeUser }
     const {
       username: leetUsername,
       profile,
       submitStats,
       submissionCalendar
-    } = matchedUser
+    } = result.matchedUser
 
     // Extract problem counts by difficulty
-    const easy = submitStats.acSubmissionNum.find((s) => s.difficulty === "Easy")?.count || 0
-    const medium = submitStats.acSubmissionNum.find((s) => s.difficulty === "Medium")?.count || 0
-    const hard = submitStats.acSubmissionNum.find((s) => s.difficulty === "Hard")?.count || 0
+    const easy = submitStats?.acSubmissionNum?.find((s) => s.difficulty === "Easy")?.count || 0
+    const medium = submitStats?.acSubmissionNum?.find((s) => s.difficulty === "Medium")?.count || 0
+    const hard = submitStats?.acSubmissionNum?.find((s) => s.difficulty === "Hard")?.count || 0
 
     // Extract submission timestamps (if available)
     let acceptedSubmissions: number[] = []
@@ -332,7 +222,7 @@ function processUserData(results: ApiResult[]): { users: UserData[], errors: Err
     }
 
     // Get total submissions count
-    const totalSubmissions = submitStats.acSubmissionNum.find(
+    const totalSubmissions = submitStats?.acSubmissionNum?.find(
       (s) => s.difficulty === "All"
     )?.submissions || 0
 
@@ -342,36 +232,36 @@ function processUserData(results: ApiResult[]): { users: UserData[], errors: Err
       try {
         // Sort dates in ascending order
         const sortedSubmissions = [...acceptedSubmissions].sort((a, b) => a - b);
-        
+
         // Calculate date ranges to find streaks
         let currentStreak = 0;
         let maxStreak = 0;
         let lastDate = 0;
-        
+
         // Check if there's a submission within the last 24 hours (for current streak)
         const now = Date.now() / 1000; // Convert to seconds
         const oneDayAgo = now - (24 * 60 * 60); // 24 hours ago in seconds
         const hasSubmissionToday = sortedSubmissions.some(
           date => date >= oneDayAgo && date <= now
         );
-        
+
         if (hasSubmissionToday) {
           currentStreak = 1;
-          
+
           // Count backwards from yesterday to find the current streak
           let checkDate = oneDayAgo - (24 * 60 * 60); // Start from 2 days ago
           let streakDays = 0;
-          
+
           while (true) {
             // Get start and end of the day we're checking
             const dayStart = checkDate;
             const dayEnd = checkDate + (24 * 60 * 60);
-            
+
             // Check if any submission falls in this day
             const hasSubmission = sortedSubmissions.some(
               date => date >= dayStart && date < dayEnd
             );
-            
+
             if (hasSubmission) {
               streakDays++;
               checkDate = checkDate - (24 * 60 * 60); // Move to previous day
@@ -379,11 +269,11 @@ function processUserData(results: ApiResult[]): { users: UserData[], errors: Err
               break; // Streak ends
             }
           }
-          
+
           currentStreak += streakDays;
           maxStreak = Math.max(currentStreak, maxStreak);
         }
-        
+
         // Also calculate max streak from historical data
         for (const date of sortedSubmissions) {
           if (lastDate === 0 || date - lastDate <= (24 * 60 * 60 * 2)) { // Allow up to 48h gap (1 missed day)
@@ -396,9 +286,9 @@ function processUserData(results: ApiResult[]): { users: UserData[], errors: Err
           }
           lastDate = date;
         }
-        
+
         maxStreak = Math.max(maxStreak, currentStreak);
-        
+
         streak = {
           current: currentStreak,
           max: maxStreak
@@ -413,8 +303,8 @@ function processUserData(results: ApiResult[]): { users: UserData[], errors: Err
 
     users.push({
       id: leetUsername,
-      name: profile.realName || leetUsername,
-      avatar: profile.userAvatar,
+      name: profile?.realName || leetUsername,
+      avatar: profile?.userAvatar || '',
       totalSolved: easy + medium + hard,
       problemsByDifficulty: {
         easy,
@@ -440,50 +330,61 @@ export async function GET() {
 
     if (cachedData) {
       return NextResponse.json({
-        ...cachedData,
-        fromCache: true
+        users: cachedData,
+        errors: [],
+        fromCache: true,
+        timestamp: new Date().toISOString(),
       })
     }
 
-    // Fetch each user sequentially to avoid overwhelming the API
-    const usersResults: ApiResult[] = [];
-    
+    // Fetch each user sequentially
+    const usersResults: UserProfile[] = [];
+
     for (const username of usernames) {
       const result = await fetchLeetCodeUser(username);
-      usersResults.push(result);
-      
-      // If we hit a rate limit, break early
-      if (result.status === 429) {
-        break;
+      if (result) {
+        usersResults.push(result);
       }
+      // Add small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     // Check if we're getting rate limited
-    const rateLimited = usersResults.some(result => result.status === 429)
+    const rateLimited = usersResults.length === 0 || usersResults.some(result => !result.matchedUser)
     if (rateLimited) {
       console.log("Rate limited by LeetCode API");
-      
+
       // Try to use older cache if available, even if expired
-      try {
-        const oldCache = await redis.get(LEETCODE_CACHE_KEY) as {
-          timestamp: number;
-          data: CacheData;
-        } | null;
-        
-        if (oldCache && oldCache.data && oldCache.data.users && oldCache.data.users.length > 0) {
-          console.log("Serving expired cache due to rate limiting");
-          return NextResponse.json({
-            ...oldCache.data,
-            fromCache: true,
-            rateLimited: true,
-            timestamp: new Date().toISOString(),
-          });
-        }
-      } catch (e) {
-        console.error("No old cache available:", e);
+      const oldCache = await prisma.leetCodeUser.findMany();
+      if (oldCache.length > 0) {
+        const formattedCache = oldCache.map(user => ({
+          id: user.id,
+          name: user.name,
+          avatar: user.avatar,
+          totalSolved: user.totalSolved,
+          problemsByDifficulty: {
+            easy: user.easyCount,
+            medium: user.mediumCount,
+            hard: user.hardCount,
+          },
+          submissions: user.submissions,
+          acceptedSubmissions: user.submissionCalendar ?
+            Object.keys(user.submissionCalendar as object).map(k => parseInt(k)) : [],
+          streak: {
+            current: user.currentStreak,
+            max: user.maxStreak
+          }
+        }));
+
+        return NextResponse.json({
+          users: formattedCache,
+          errors: [],
+          fromCache: true,
+          rateLimited: true,
+          timestamp: new Date().toISOString(),
+        });
       }
-      
-      // If no old cache, return error
+
       return NextResponse.json({
         users: [],
         errors: [{
@@ -498,22 +399,31 @@ export async function GET() {
     // Process user results
     const { users, errors } = processUserData(usersResults)
 
-    // Cache the results for future requests
-    const responseData: CacheData = {
+    // Save each user to the database
+    await Promise.all(users.map(user => saveUserData(user)))
+
+    // Log successful fetch
+    await prisma.fetchLog.create({
+      data: {
+        success: true
+      }
+    })
+
+    return NextResponse.json({
       users,
       errors,
       timestamp: new Date().toISOString(),
-    }
-
-    // Only cache if we got some successful results
-    if (users.length > 0) {
-      await saveCache(responseData)
-    }
-
-    return NextResponse.json(responseData)
+    })
   } catch (error) {
-    console.error("Unhandled error in GET handler:", error);
-    
+    console.error("Unhandled error in GET handler:", error)
+
+    await prisma.fetchLog.create({
+      data: {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }
+    })
+
     return NextResponse.json({
       users: [],
       errors: [{
@@ -521,7 +431,7 @@ export async function GET() {
         error: "An unexpected error occurred: " + (error instanceof Error ? error.message : String(error))
       }],
       timestamp: new Date().toISOString(),
-    }, { status: 500 });
+    }, { status: 500 })
   }
 }
 

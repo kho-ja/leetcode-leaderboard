@@ -1,0 +1,63 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model LeetCodeUser {
+  id        String   @id
+  name      String
+  avatar    String
+  lastFetch DateTime @default(now())
+
+  // Problem solving stats
+  totalSolved Int
+  easyCount   Int
+  mediumCount Int
+  hardCount   Int
+  submissions Int
+
+  // Streak information
+  currentStreak Int
+  maxStreak     Int
+
+  // Submission history stored as JSON
+  submissionCalendar Json?
+
+  // Add relation to submissions
+  submissions LeetCodeSubmission[]
+
+  @@map("leetcode_users")
+}
+
+// Optional: Track fetch history
+model FetchLog {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  success   Boolean
+  error     String?
+
+  @@map("fetch_logs")
+}
+
+model LeetCodeSubmission {
+  id         Int          @id @default(autoincrement())
+  userId     String
+  timestamp  DateTime
+  difficulty String // "Easy", "Medium", "Hard"
+  problemId  String
+  accepted   Boolean
+  user       LeetCodeUser @relation(fields: [userId], references: [id])
+
+  @@map("leetcode_submissions")
+}

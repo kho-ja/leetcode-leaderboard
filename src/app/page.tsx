@@ -50,6 +50,22 @@ type ErrorData = {
   error: string;
 };
 
+function filterSubmissionsByTimeRange(
+  submissions: number[],
+  timeRange: string,
+  now: number
+) {
+  const msInDay = 86400000;
+  const cutoff = {
+    week: now - 7 * msInDay,
+    month: now - 30 * msInDay,
+    year: now - 365 * msInDay,
+    all: 0,
+  }[timeRange];
+
+  return submissions.filter((timestamp) => timestamp * 1000 >= cutoff);
+}
+
 export default function DashboardPage() {
   const [timeRange, setTimeRange] = useState("week");
   const [userData, setUserData] = useState<UserData[]>([]);
@@ -93,47 +109,54 @@ export default function DashboardPage() {
   useEffect(() => {
     const filterDataByTimeRange = () => {
       const now = Date.now();
-      const msInDay = 86400000; // milliseconds in a day
-
-      const getFilteredSubmissions = (
-        timestamps: number[],
-        daysAgo: number
-      ) => {
-        const cutoff = now - daysAgo * msInDay;
-        return timestamps.filter((timestamp) => timestamp * 1000 >= cutoff)
-          .length;
-      };
+      const msInDay = 86400000;
 
       const filtered = userData
         .map((user) => {
-          let relevantSubmissions = 0;
+          // Filter submissions for the selected time period
+          const filteredSubmissions = filterSubmissionsByTimeRange(
+            user.acceptedSubmissions,
+            timeRange,
+            now
+          );
 
-          switch (timeRange) {
-            case "week":
-              relevantSubmissions = getFilteredSubmissions(
-                user.acceptedSubmissions,
-                7
-              );
-              break;
-            case "month":
-              relevantSubmissions = getFilteredSubmissions(
-                user.acceptedSubmissions,
-                30
-              );
-              break;
-            case "year":
-              relevantSubmissions = getFilteredSubmissions(
-                user.acceptedSubmissions,
-                365
-              );
-              break;
-            default:
-              relevantSubmissions = user.totalSolved;
-          }
+          // Calculate problems by difficulty for the filtered period
+          const problemsByDifficulty = {
+            easy:
+              timeRange === "all"
+                ? user.problemsByDifficulty.easy
+                : Math.min(
+                    filteredSubmissions.length,
+                    user.problemsByDifficulty.easy
+                  ),
+            medium:
+              timeRange === "all"
+                ? user.problemsByDifficulty.medium
+                : Math.min(
+                    filteredSubmissions.length,
+                    user.problemsByDifficulty.medium
+                  ),
+            hard:
+              timeRange === "all"
+                ? user.problemsByDifficulty.hard
+                : Math.min(
+                    filteredSubmissions.length,
+                    user.problemsByDifficulty.hard
+                  ),
+          };
+
+          // Calculate total submissions for the period
+          const periodSubmissions =
+            timeRange === "all"
+              ? user.submissions
+              : Math.min(filteredSubmissions.length * 2, user.submissions); // Estimate: assume ~2 submissions per solved problem
 
           return {
             ...user,
-            totalSolved: relevantSubmissions,
+            totalSolved: filteredSubmissions.length,
+            problemsByDifficulty,
+            submissions: periodSubmissions,
+            // Streak remains unchanged as it's always current
           };
         })
         .sort((a, b) => b.totalSolved - a.totalSolved);
