@@ -35,7 +35,7 @@ model LeetCodeUser {
   submissionCalendar Json?
 
   // Add relation to submissions
-  submissions LeetCodeSubmission[]
+  submissionHistory LeetCodeSubmission[]
 
   @@map("leetcode_users")
 }

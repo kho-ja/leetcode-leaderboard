@@ -56,12 +56,16 @@ function filterSubmissionsByTimeRange(
   now: number
 ) {
   const msInDay = 86400000;
-  const cutoff = {
-    week: now - 7 * msInDay,
-    month: now - 30 * msInDay,
-    year: now - 365 * msInDay,
-    all: 0,
-  }[timeRange];
+  const cutoff =
+    timeRange === "all"
+      ? 0
+      : now -
+        {
+          week: 7,
+          month: 30,
+          year: 365,
+        }[timeRange as "week" | "month" | "year"] *
+          msInDay;
 
   return submissions.filter((timestamp) => timestamp * 1000 >= cutoff);
 }
@@ -109,7 +113,6 @@ export default function DashboardPage() {
   useEffect(() => {
     const filterDataByTimeRange = () => {
       const now = Date.now();
-      const msInDay = 86400000;
 
       const filtered = userData
         .map((user) => {
