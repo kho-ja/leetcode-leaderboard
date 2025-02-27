@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/theme-toggle";
+import Footer from "@/components/footer";
 
 type UserData = {
   id: string;
@@ -205,8 +206,8 @@ export default function DashboardPage() {
   const topUsers = filteredData.slice(0, 3);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted p-8">
-      <div className="mx-auto max-w-7xl space-y-8">
+    <div className="min-h-screen bg-gradient-to-b from-background to-muted">
+      <div className="mx-auto max-w-7xl space-y-8 p-8">
         {showErrors && fetchErrors.length > 0 && (
           <Alert variant="destructive" className="relative">
             <AlertCircle className="h-4 w-4" />
@@ -541,6 +542,7 @@ export default function DashboardPage() {
           </TabsContent>
         </Tabs>
       </div>
+      <Footer />
     </div>
   );
 }

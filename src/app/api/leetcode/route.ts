@@ -185,10 +185,10 @@ async function saveUserData(userData: UserData): Promise<void> {
     });
 
     // Then create submissions records
-    const submissions = userData.acceptedSubmissions.map(timestamp => ({
+    const submissions = userData.acceptedSubmissions.map(timeStamp => ({
 
       userId: userData.id,
-      timestamp: new Date(timestamp * 1000),
+      timestamp: new Date(timeStamp * 1000),
       // We'd need these from the LeetCode API
       difficulty: "Unknown", // Would need actual difficulty
       problemId: "Unknown", // Would need actual problem ID
