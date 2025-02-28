@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server"
 import { LeetCode, UserProfile } from "leetcode-query"
-import { PrismaClient } from '@prisma/client'
+import prisma from "@/lib/prisma";
 
-const prisma = new PrismaClient()
 const leetcode = new LeetCode()
 
 // Type definitions for LeetCode API responses
