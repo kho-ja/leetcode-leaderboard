@@ -4,10 +4,10 @@ import { compare } from "bcryptjs"
 import prisma from "@/lib/prisma"
 
 export default {
+    pages: {
+        signIn: "/login",
+    },
     callbacks: {
-        async redirect({ baseUrl }) {
-            return `${baseUrl}/dashboard`
-        },
         async jwt({ token, user }) {
             if (user) {
                 token.id = user.id
@@ -31,38 +31,34 @@ export default {
             },
             async authorize(credentials) {
                 if (!credentials?.email || !credentials?.password) {
-                    throw new Error("Email and password are required")
+                    console.error("Missing credentials");
+                    throw new Error("Email and password are required");
                 }
 
                 const user = await prisma.user.findFirst({
-                    where: {
-                        email: credentials.email,
-                    }
-                })
+                    where: { email: credentials.email },
+                });
 
-
-                if (!user || !user.password) {
-                    console.log("User is not valid", user)
-                    throw new Error("Invalid credentials")
+                if (!user) {
+                    console.error("User not found for email:", credentials.email);
+                    throw new Error("Invalid credentials");
                 }
 
+                if (!user.password) {
+                    console.error("User has no password set:", credentials.email);
+                    throw new Error("Invalid credentials");
+                }
 
-                const isPasswordValid = await compare(credentials.password as string, user.password as string);
+                const isPasswordValid = await compare(credentials?.password as string, user.password);
 
                 if (!isPasswordValid) {
-                    console.log("Password is not valid", user)
-                    throw new Error("Invalid credentials")
+                    console.error("Password mismatch for:", credentials.email);
+                    throw new Error("Invalid credentials");
                 }
 
-                console.log("User is valid", user)
-
-                return {
-                    id: user.id,
-                    email: user.email,
-                    name: user.name,
-                    image: user.image,
-                }
-            },
+                console.log("User authenticated successfully:", user.email);
+                return { id: user.id, email: user.email, name: user.name, image: user.image };
+            }
         }),
     ],
 } satisfies NextAuthConfig

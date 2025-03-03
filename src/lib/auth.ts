@@ -1,7 +1,7 @@
 import NextAuth, { User as NextAuthUser } from "next-auth"
 import prisma from "@/lib/prisma"
 import { PrismaAdapter } from "@auth/prisma-adapter"
-import authConfig from "auth.config";
+import authConfig from "@/lib/auth.config";
 
 declare module "next-auth" {
   interface Session {

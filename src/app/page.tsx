@@ -25,8 +25,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { ThemeToggle } from "@/components/theme-toggle";
 import Footer from "@/components/footer";
+import Header from "@/components/header";
 
 type UserData = {
   id: string;
@@ -207,6 +207,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted">
+      <Header />
       <div className="mx-auto max-w-7xl space-y-8 p-8">
         {showErrors && fetchErrors.length > 0 && (
           <Alert variant="destructive" className="relative">
@@ -259,7 +260,6 @@ export default function DashboardPage() {
                 <SelectItem value="all">All Time</SelectItem>
               </SelectContent>
             </Select>
-            <ThemeToggle />
           </div>
         </div>
 

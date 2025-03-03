@@ -5,7 +5,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +18,7 @@ import {
 } from "@/components/ui/form";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
-import { signIn } from "next-auth/react";
+import { login } from "@/lib/actions";
 
 // Form validation schema
 const loginSchema = z.object({
@@ -48,40 +47,18 @@ export function LoginForm({
 
   // Use TanStack Query mutation
   const loginMutation = useMutation({
-    mutationFn: async (data: z.infer<typeof loginSchema>) => {
-      return await signIn("credentials", data);
-    },
+    mutationFn: async (data: z.infer<typeof loginSchema>) =>
+      await login(data.email, data.password),
     onSuccess: (data) => {
-      toast(
-        <div>
-          <h1 className="text-xl font-bold">Login successful</h1>
-          <p className="text-sm text-slate-500">
-            {data?.error || "Something went wrong try again later."}
-          </p>
-        </div>,
-        {
-          className: "bg-green-500 text-white",
-          duration: 3000,
-        }
-      );
+      toast.success("Login successful", {
+        description: data?.message ?? "success",
+      });
 
-      // Redirect to dashboard after successful login
       router.push("/dashboard");
     },
     onError: (error: Error) => {
-      toast(
-        <div>
-          <h1>Login failed</h1>
-          <p>{error.message}</p>
-        </div>,
-        {
-          className: "bg-red-500 text-white",
-          duration: 3000,
-        }
-      );
-      form.setError("email", {
-        type: "manual",
-        message: "Invalid credentials",
+      toast.error("Login failed", {
+        description: error.message,
       });
     },
   });
@@ -127,7 +104,7 @@ export function LoginForm({
                       <Input
                         id="email"
                         type="email"
-                        autoComplete="current-email"
+                        autoComplete="email"
                         placeholder="m@example.com"
                         {...field}
                       />
@@ -165,11 +142,13 @@ export function LoginForm({
                 {loginMutation.isPending ? "Logging in..." : "Login"}
               </Button>
             </div>
+
             <div className="relative text-center text-sm after:absolute after:inset-0 after:top-1/2 after:z-0 after:flex after:items-center after:border-t after:border-border">
               <span className="relative z-10 bg-background px-2 text-muted-foreground">
                 Or
               </span>
             </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <Button variant="outline" className="w-full" type="button">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -180,6 +159,7 @@ export function LoginForm({
                 </svg>
                 Continue with Apple
               </Button>
+
               <Button variant="outline" className="w-full" type="button">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
                   <path
@@ -193,6 +173,7 @@ export function LoginForm({
           </div>
         </form>
       </Form>
+
       <div className="text-balance text-center text-xs text-muted-foreground [&_a]:underline [&_a]:underline-offset-4 hover:[&_a]:text-primary  ">
         By clicking continue, you agree to our <a href="#">Terms of Service</a>{" "}
         and <a href="#">Privacy Policy</a>.

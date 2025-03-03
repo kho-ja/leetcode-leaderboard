@@ -18,17 +18,31 @@ import {
 const data = {
   navMain: [
     {
-      title: "LeetCode Users",
-      url: "#",
+      title: "Users",
+      url: "/dashboard/users",
       icon: User2,
-      isActive: true,
       items: [
         {
           title: "All Users",
-          url: "/dashboard/leetcode-users",
+          url: "/dashboard/users",
         },
         {
           title: "Add User",
+          url: "/dashboard/users/add",
+        },
+      ],
+    },
+    {
+      title: "LeetCode Users",
+      url: "/dashboard/leetcode-users",
+      icon: Code2Icon,
+      items: [
+        {
+          title: "All LeetCode Users",
+          url: "/dashboard/leetcode-users",
+        },
+        {
+          title: "Add LeetCode User",
           url: "/dashboard/leetcode-users/add",
         },
       ],

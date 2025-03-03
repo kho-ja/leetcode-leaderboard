@@ -1,11 +1,11 @@
-import authConfig from "../auth.config"
+import authConfig from "./lib/auth.config"
 import NextAuth from "next-auth"
 
 const protectedRoutes = [
     "/dashboard",
 ]
 
-const { auth } = NextAuth(authConfig)
+export const { auth } = NextAuth(authConfig)
 export default auth((req) => {
     const { nextUrl, auth } = req;
 
