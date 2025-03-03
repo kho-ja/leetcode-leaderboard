@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/form";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
-import { login } from "@/lib/actions";
+import { login } from "@/lib/actions/actions";
 
 // Form validation schema
 const loginSchema = z.object({

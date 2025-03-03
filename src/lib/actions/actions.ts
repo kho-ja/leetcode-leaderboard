@@ -1,7 +1,7 @@
 "use server";
 
 import { AuthError } from "next-auth";
-import { signIn } from "./auth";
+import { signIn } from "@/lib/auth";
 
 export async function login(email: string, password: string) {
     try {
@@ -16,9 +16,14 @@ export async function login(email: string, password: string) {
         };
     } catch (error) {
         if (error instanceof AuthError) {
-            throw error.cause?.err
+            switch (error.type) {
+                case "CredentialsSignin":
+                case "CallbackRouteError":
+                    throw new Error("Invalid credentials!");
+                default:
+                    throw new Error("Something went wrong!");
+            }
         }
-
-        throw error;
+        throw new Error("Something went wrong!");
     }
 }
